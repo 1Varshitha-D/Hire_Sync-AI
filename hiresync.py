@@ -8,8 +8,8 @@ import re
 st.set_page_config(page_title="HireSync AI", layout="wide")
 
 # --- UI Header ---
-st.title("🎯 HireSync AI: Recruiter Dashboard")
-st.subheader("Dual-View Analysis: Internal Review & Applicant Guidance")
+st.title("✨ HireSync AI: Recruiter Dashboard ")
+st.subheader("Dual-Analysis: Internal Review & Applicant Guidance")
 
 # --- Sidebar ---
 with st.sidebar:
@@ -17,7 +17,7 @@ with st.sidebar:
     api_key = st.text_input("Enter Gemini API Key", type="password")
     st.info("Get your key from [Google AI Studio](https://aistudio.google.com/)")
     
-    if st.button("Clear All Results"):
+    if st.button("Reset"):
         st.session_state.analysis_results = []
         st.rerun()
 
@@ -119,7 +119,7 @@ if st.session_state.analysis_results:
     
     # Global CSV Download
     csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Download Rankings (CSV)", data=csv, file_name="rankings.csv")
+    st.download_button("📥👉 Download Rankings (CSV)", data=csv, file_name="rankings.csv")
     
     for index, row in df.iterrows():
         with st.expander(f"📊 {row['Score']}% — {row['Name']}"):
