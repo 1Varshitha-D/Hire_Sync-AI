@@ -2,37 +2,22 @@ import streamlit as st
 import google.generativeai as genai
 from PyPDF2 import PdfReader
 import pandas as pd
-import re
 
 # --- Page Config ---
-st.set_page_config(page_title="HireSync AI Pro", layout="wide")
+st.set_page_config(page_title="HireSync AI", layout="wide")
 
-# --- UI Header ---
-st.title("✨ HireSync AI: Recruiter Dashboard")
-st.subheader("Dual-Analysis: Internal Review & Applicant Guidance")
+st.title("🎯 HireSync AI: Recruiter Dashboard")
 
 # --- Sidebar ---
 with st.sidebar:
-    st.header("Settings")
-    # FIX: Looks for secret key first (for deployment), then falls back to manual input
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
-        st.success("✅ System Key Active")
-    else:
-        api_key = st.text_input("Enter Gemini API Key", type="password")
-        st.info("Get your key from [Google AI Studio](https://aistudio.google.com/)")
+    st.header("Configuration")
+    # Manual entry - no "Secrets" logic here
+    api_key = st.text_input("Enter Gemini API Key", type="password")
+    st.info("Get your key from [Google AI Studio](https://aistudio.google.com/)")
     
-    st.markdown("---")
-    if st.button("🔄 Reset All Data"):
+    if st.button("Clear Results"):
         st.session_state.analysis_results = []
-        st.session_state.shortlist = []
         st.rerun()
-
-# --- Memory Management ---
-if "analysis_results" not in st.session_state:
-    st.session_state.analysis_results = []
-if "shortlist" not in st.session_state:
-    st.session_state.shortlist = []
 
 # --- Helper Functions ---
 def extract_text_from_pdf(file):
@@ -42,14 +27,14 @@ def extract_text_from_pdf(file):
     except:
         return ""
 
-def get_gemini_score(resume_text, jd, api_key):
+def get_gemini_analysis(resume_text, jd, api_key):
     try:
         genai.configure(api_key=api_key)
-        # Using a reliable model version
         model = genai.GenerativeModel("gemini-1.5-flash")
         prompt = f"""
-        Analyze Resume vs JD. 
-        Format STRICTLY as: Score | Internal Review | Applicant Guidance
+        Compare this Resume to the Job Description. 
+        Return ONLY this format: Score: [0-100] | Review: [text] | Guidance: [text]
+        
         JD: {jd}
         Resume: {resume_text}
         """
@@ -58,62 +43,42 @@ def get_gemini_score(resume_text, jd, api_key):
     except Exception as e:
         return f"0 | Error: {str(e)} | N/A"
 
-# --- Input Section ---
-job_description = st.text_area("📋 Paste Job Description (JD):", height=150)
-uploaded_files = st.file_uploader("📂 Upload Resumes (PDF):", type="pdf", accept_multiple_files=True)
+# --- Main App ---
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = []
 
-# --- Processing Section ---
-if st.button("🚀 Run Dual-View Analysis"):
-    if not api_key or not job_description or not uploaded_files:
-        st.error("Please provide API Key, JD, and Resumes.")
+jd_input = st.text_area("📋 Paste Job Description (JD):", height=150)
+files_input = st.file_uploader("📂 Upload Resumes (PDF):", type="pdf", accept_multiple_files=True)
+
+if st.button("🚀 Run Analysis"):
+    if not api_key or not jd_input or not files_input:
+        st.error("Missing API Key, JD, or Resumes!")
     else:
-        temp_results = []
-        progress_bar = st.progress(0)
-        
-        for i, file in enumerate(uploaded_files):
-            with st.spinner(f"Analyzing {file.name}..."):
-                text = extract_text_from_pdf(file)
-                analysis = get_gemini_score(text, job_description, api_key)
-                
-                # FIX: More robust score parsing to prevent 0% errors
-                try:
-                    parts = analysis.split("|")
-                    score_match = re.search(r'\d+', parts[0])
-                    score = int(score_match.group()) if score_match else 0
-                    
-                    temp_results.append({
-                        "Name": file.name,
-                        "Score": score,
-                        "Recruiter_Notes": parts[1].strip() if len(parts) > 1 else "No review provided",
-                        "Applicant_Notes": parts[2].strip() if len(parts) > 2 else "No guidance provided"
-                    })
-                except:
-                    temp_results.append({"Name": file.name, "Score": 0, "Recruiter_Notes": "Parsing error", "Applicant_Notes": "N/A"})
-            progress_bar.progress((i + 1) / len(uploaded_files))
-        
-        st.session_state.analysis_results = temp_results
+        results = []
+        progress = st.progress(0)
+        for i, file in enumerate(files_input):
+            text = extract_text_from_pdf(file)
+            analysis = get_gemini_analysis(text, jd_input, api_key)
+            
+            # Simple split logic
+            parts = analysis.split("|")
+            # Cleaning the score (removes letters, keeps numbers)
+            score_raw = parts[0].replace("Score:", "").strip()
+            score = ''.join(filter(str.isdigit, score_raw))
+            
+            results.append({
+                "Name": file.name,
+                "Score": int(score) if score else 0,
+                "Review": parts[1].strip() if len(parts) > 1 else "No review",
+                "Guidance": parts[2].strip() if len(parts) > 2 else "No guidance"
+            })
+            progress.progress((i + 1) / len(files_input))
+        st.session_state.analysis_results = results
 
 # --- Display Results ---
 if st.session_state.analysis_results:
-    st.markdown("---")
-    
-    # Export Buttons
     df = pd.DataFrame(st.session_state.analysis_results).sort_values(by="Score", ascending=False)
-    col_dl1, col_dl2 = st.columns(2)
-    col_dl1.download_button("🏢 Download Recruiter List", df.to_csv(index=False).encode('utf-8'), "recruiter_view.csv")
-    col_dl2.download_button("🎓 Download Applicant Tips", df[['Name', 'Applicant_Notes']].to_csv(index=False).encode('utf-8'), "applicant_tips.csv")
-
-    st.write("### ✅ Shortlisted: ", ", ".join(st.session_state.shortlist) if st.session_state.shortlist else "None")
-
     for index, row in df.iterrows():
         with st.expander(f"📊 {row['Score']}% — {row['Name']}"):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.warning(f"**Internal Review:** {row['Recruiter_Notes']}")
-            with c2:
-                st.info(f"**Applicant Guidance:** {row['Applicant_Notes']}")
-            
-            if st.button(f"Shortlist {row['Name']}", key=f"sl_{index}"):
-                if row['Name'] not in st.session_state.shortlist:
-                    st.session_state.shortlist.append(row['Name'])
-                    st.rerun()
+            st.warning(f"**Internal Review:** {row['Review']}")
+            st.info(f"**Applicant Guidance:** {row['Guidance']}")
