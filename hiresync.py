@@ -13,13 +13,19 @@ st.subheader("Dual-View Analysis: Internal Review & Applicant Guidance")
 # --- Sidebar ---
 with st.sidebar:
     st.header("Settings")
-    api_key = st.text_input("Enter Gemini API Key", type="password")
-    st.info("Get your key from [Google AI Studio](https://aistudio.google.com/)")
+    # FIX: Looks for secret key first (for deployment), then falls back to manual input
+    if "GEMINI_API_KEY" in st.secrets:
+        api_key = st.secrets["GEMINI_API_KEY"]
+        st.success("✅ System Key Active")
+    else:
+        api_key = st.text_input("Enter Gemini API Key", type="password")
+        st.info("Get your key from [Google AI Studio](https://aistudio.google.com/)")
     
-    # Handy reset button to clear memory
-    if st.button("Clear All Results"):
+    st.markdown("---")
+    if st.button("🔄 Reset All Data"):
         st.session_state.analysis_results = []
-        st.rerun()
+        st.session_state.shortlist = []
+        st.rerun(
 
 # --- Helper Functions ---
 def extract_text_from_pdf(file):
