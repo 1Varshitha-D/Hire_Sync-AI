@@ -4,112 +4,70 @@ from PyPDF2 import PdfReader
 import pandas as pd
 import re
 
-# --- Page Config ---
+# --- 1. SETUP ---
 st.set_page_config(page_title="HireSync AI", layout="wide")
+st.title("🎯 HireSync AI")
 
-# --- UI Header ---
-st.title("🎯 HireSync AI: Recruiter Dashboard")
-st.subheader("Dual-View Analysis")
-
-# --- Sidebar ---
+# --- 2. SIDEBAR ---
 with st.sidebar:
     st.header("Settings")
-    # Manual Key Entry
     api_key = st.text_input("Enter Gemini API Key", type="password")
-    st.info("Get your key from [Google AI Studio](https://aistudio.google.com/)")
-    
-    if st.button("Clear All Data"):
+    if st.button("Clear Results"):
         st.session_state.analysis_results = []
         st.rerun()
 
-# --- Helper Functions ---
-def extract_text_from_pdf(file):
-    try:
-        reader = PdfReader(file)
-        text = "".join([page.extract_text() for page in reader.pages if page.extract_text()])
-        return text
-    except Exception as e:
-        return ""
-
-def get_gemini_score(resume_text, jd, api_key):
-    try:
-        genai.configure(api_key=api_key)
-        # FIXED: Changed from 'gemini-2.5' to the stable 'gemini-1.5-flash'
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        prompt = f"""
-        Analyze Resume vs JD. Return STRICTLY in this format: 
-        Score: [number] | Review: [text] | Guidance: [text]
-        
-        JD: {jd}
-        Resume: {resume_text}
-        """
-        response = model.generate_content(prompt)
-        return response.text.strip()
-    except Exception as e:
-        return f"0 | Error: {str(e)} | N/A"
-
-# --- Memory Management ---
+# --- 3. LOGIC ---
 if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = []
 
-# --- Input Section ---
-# Added unique 'key' to prevent Duplicate ID errors
-job_description = st.text_area("📋 Paste Job Description (JD):", height=150, key="jd_input_box")
-uploaded_files = st.file_uploader("📂 Upload Resumes (PDF):", type="pdf", accept_multiple_files=True, key="file_uploader_box")
+def extract_text(file):
+    try:
+        reader = PdfReader(file)
+        return "".join([p.extract_text() for p in reader.pages if p.extract_text()])
+    except: return ""
 
-# --- Processing Section ---
-if st.button("🚀 Run Dual-View Analysis"):
-    if not api_key or not job_description or not uploaded_files:
-        st.error("Please provide API Key, JD, and Resumes.")
+def get_analysis(text, jd, key):
+    try:
+        genai.configure(api_key=key)
+        # Using 1.5-flash because it is the most stable version right now
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        prompt = f"Score: 0-100 | Review | Guidance. JD: {jd} Resume: {text}"
+        return model.generate_content(prompt).text
+    except Exception as e:
+        return f"0 | Error: {str(e)} | N/A"
+
+# --- 4. INPUTS ---
+jd = st.text_area("📋 Job Description:", height=150, key="jd_box")
+files = st.file_uploader("📂 Resumes:", type="pdf", accept_multiple_files=True, key="file_box")
+
+# --- 5. RUN ---
+if st.button("🚀 Analyze"):
+    if not api_key or not jd or not files:
+        st.error("Missing Info")
     else:
-        temp_results = []
-        progress_bar = st.progress(0)
-        
-        for i, file in enumerate(uploaded_files):
-            with st.spinner(f"Analyzing {file.name}..."):
-                text = extract_text_from_pdf(file)
-                analysis = get_gemini_score(text, job_description, api_key)
-                
-                try:
-                    # Improved parsing to find the number even if the AI adds words
-                    parts = analysis.split("|")
-                    score_match = re.search(r'\d+', parts[0])
-                    score = int(score_match.group()) if score_match else 0
-                    
-                    temp_results.append({
-                        "Name": file.name,
-                        "Score": score,
-                        "Recruiter_Notes": parts[1].replace("Review:", "").strip() if len(parts) > 1 else "No review provided",
-                        "Applicant_Notes": parts[2].replace("Guidance:", "").strip() if len(parts) > 2 else "No guidance provided"
-                    })
-                except:
-                    temp_results.append({"Name": file.name, "Score": 0, "Recruiter_Notes": "Parsing error", "Applicant_Notes": "N/A"})
-            
-            progress_bar.progress((i + 1) / len(uploaded_files))
-        
-        st.session_state.analysis_results = temp_results
+        results = []
+        bar = st.progress(0)
+        for i, f in enumerate(files):
+            raw = get_analysis(extract_text(f), jd, api_key)
+            try:
+                parts = raw.split("|")
+                # Grab just the number for the score
+                num = int(re.search(r'\d+', parts[0]).group()) if parts else 0
+                results.append({
+                    "name": f.name, "score": num,
+                    "notes": parts[1] if len(parts) > 1 else "Done",
+                    "tips": parts[2] if len(parts) > 2 else "N/A"
+                })
+            except: pass
+            bar.progress((i + 1) / len(files))
+        st.session_state.analysis_results = results
 
-# --- Display Results ---
+# --- 6. DISPLAY ---
 if st.session_state.analysis_results:
-    st.markdown("---")
-    df = pd.DataFrame(st.session_state.analysis_results).sort_values(by="Score", ascending=False)
-    
-    for index, row in df.iterrows():
-        # Added 'key' to the expander and buttons to prevent DuplicateElementId errors
-        with st.expander(f"📊 {row['Score']}% — {row['Name']}", expanded=False):
-            c1, c2 = st.columns(2)
-            with c1:
-                st.markdown("#### 🏢 Company Internal Review")
-                st.warning(row["Recruiter_Notes"])
-            with c2:
-                st.markdown("#### 🎓 Applicant Guidance")
-                st.info(row["Applicant_Notes"])
-            
-            col_btn1, col_btn2 = st.columns([1, 4])
-            with col_btn1:
-                # Keys are now unique using the index
-                if st.button("Shortlist", key=f"sl_btn_{index}"):
-                    st.success(f"Shortlisted {row['Name']}!")
-            with col_btn2:
-                if st.button("Send Feedback", key=f"fb_btn_{index}"):
-                    st.info(f"Feedback prepared for {row['Name']}")
+    for i, res in enumerate(st.session_state.analysis_results):
+        with st.expander(f"{res['score']}% - {res['name']}"):
+            st.write(f"**Review:** {res['notes']}")
+            st.write(f"**Tips:** {res['tips']}")
+            # Unique keys for buttons prevent the Duplicate ID error
+            if st.button(f"Shortlist {res['name']}", key=f"sl_{i}"):
+                st.success("Saved!")
