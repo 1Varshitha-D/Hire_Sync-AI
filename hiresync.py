@@ -120,6 +120,3 @@ if st.session_state.analysis_results:
                 if st.button("Shortlist", key=f"sl_{index}"):
                     st.success(f"Shortlisted {row['Name']}!")
                     st.balloons()
-            with col_btn2:
-                if st.button("Send Feedback", key=f"fb_{index}"):
-                    st.toast(f"Feedback prepared for {row['Name']}")
