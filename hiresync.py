@@ -25,7 +25,7 @@ with st.sidebar:
     if st.button("🔄 Reset All Data"):
         st.session_state.analysis_results = []
         st.session_state.shortlist = []
-        st.rerun(
+        st.rerun()
 
 # --- Helper Functions ---
 def extract_text_from_pdf(file):
