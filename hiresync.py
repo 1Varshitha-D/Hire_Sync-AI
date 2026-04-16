@@ -2,72 +2,100 @@ import streamlit as st
 import google.generativeai as genai
 from PyPDF2 import PdfReader
 import pandas as pd
-import re
 
-# --- 1. SETUP ---
+# --- Page Config ---
 st.set_page_config(page_title="HireSync AI", layout="wide")
-st.title("🎯 HireSync AI")
 
-# --- 2. SIDEBAR ---
+# --- UI Header ---
+st.title("🎯 HireSync AI: Recruiter Dashboard")
+st.subheader("Dual-View Analysis")
+
+# --- Sidebar ---
 with st.sidebar:
     st.header("Settings")
     api_key = st.text_input("Enter Gemini API Key", type="password")
-    if st.button("Clear Results"):
-        st.session_state.analysis_results = []
-        st.rerun()
+    st.info("Get your key from [Google AI Studio](https://aistudio.google.com/)")
 
-# --- 3. LOGIC ---
-if "analysis_results" not in st.session_state:
-    st.session_state.analysis_results = []
-
-def extract_text(file):
+# --- Helper Functions ---
+def extract_text_from_pdf(file):
     try:
         reader = PdfReader(file)
-        return "".join([p.extract_text() for p in reader.pages if p.extract_text()])
-    except: return ""
+        text = "".join([page.extract_text() for page in reader.pages if page.extract_text()])
+        return text
+    except Exception as e:
+        return f"Error: {e}"
 
-def get_analysis(text, jd, key):
+def get_gemini_score(resume_text, jd, api_key):
     try:
-        genai.configure(api_key=key)
-        # Using 1.5-flash because it is the most stable version right now
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        prompt = f"Score: 0-100 | Review | Guidance. JD: {jd} Resume: {text}"
-        return model.generate_content(prompt).text
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        prompt = f"""
+        Analyze Resume vs JD. Return STRICTLY: Score | Internal Review | Applicant Guidance
+        JD: {jd}
+        Resume: {resume_text}
+        """
+        response = model.generate_content(prompt)
+        return response.text.strip()
     except Exception as e:
         return f"0 | Error: {str(e)} | N/A"
 
-# --- 4. INPUTS ---
-jd = st.text_area("📋 Job Description:", height=150, key="jd_box")
-files = st.file_uploader("📂 Resumes:", type="pdf", accept_multiple_files=True, key="file_box")
+# --- Input Section ---
+job_description = st.text_area("📋 Paste Job Description (JD):", height=150)
+uploaded_files = st.file_uploader("📂 Upload Resumes (PDF):", type="pdf", accept_multiple_files=True)
 
-# --- 5. RUN ---
-if st.button("🚀 Analyze"):
-    if not api_key or not jd or not files:
-        st.error("Missing Info")
+# --- Memory Management (Session State) ---
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = []
+
+# --- Processing Section ---
+if st.button("🚀 Run Dual-View Analysis"):
+    if not api_key or not job_description or not uploaded_files:
+        st.error("Please provide API Key, JD, and Resumes.")
     else:
-        results = []
-        bar = st.progress(0)
-        for i, f in enumerate(files):
-            raw = get_analysis(extract_text(f), jd, api_key)
-            try:
-                parts = raw.split("|")
-                # Grab just the number for the score
-                num = int(re.search(r'\d+', parts[0]).group()) if parts else 0
-                results.append({
-                    "name": f.name, "score": num,
-                    "notes": parts[1] if len(parts) > 1 else "Done",
-                    "tips": parts[2] if len(parts) > 2 else "N/A"
-                })
-            except: pass
-            bar.progress((i + 1) / len(files))
-        st.session_state.analysis_results = results
+        temp_results = []
+        progress_bar = st.progress(0)
+        
+        for i, file in enumerate(uploaded_files):
+            with st.spinner(f"Analyzing {file.name}..."):
+                text = extract_text_from_pdf(file)
+                analysis = get_gemini_score(text, job_description, api_key)
+                
+                try:
+                    parts = analysis.split("|")
+                    score = int(''.join(filter(str.isdigit, parts[0]))) if "|" in analysis else 0
+                    temp_results.append({
+                        "Name": file.name,
+                        "Score": score,
+                        "Recruiter_Notes": parts[1].strip() if len(parts) > 1 else "Error",
+                        "Applicant_Notes": parts[2].strip() if len(parts) > 2 else "N/A"
+                    })
+                except:
+                    pass
+            progress_bar.progress((i + 1) / len(uploaded_files))
+        
+        # Save to memory!
+        st.session_state.analysis_results = temp_results
 
-# --- 6. DISPLAY ---
+# --- Display Results from Memory ---
 if st.session_state.analysis_results:
-    for i, res in enumerate(st.session_state.analysis_results):
-        with st.expander(f"{res['score']}% - {res['name']}"):
-            st.write(f"**Review:** {res['notes']}")
-            st.write(f"**Tips:** {res['tips']}")
-            # Unique keys for buttons prevent the Duplicate ID error
-            if st.button(f"Shortlist {res['name']}", key=f"sl_{i}"):
-                st.success("Saved!")
+    st.markdown("---")
+    df = pd.DataFrame(st.session_state.analysis_results).sort_values(by="Score", ascending=False)
+    
+    for index, row in df.iterrows():
+        with st.expander(f"📊 {row['Score']}% — {row['Name']}"):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("#### 🏢 Company Internal Review")
+                st.warning(row["Recruiter_Notes"])
+            with c2:
+                st.markdown("#### 🎓 Applicant Guidance")
+                st.info(row["Applicant_Notes"])
+            
+            # These buttons will now work because the data is in st.session_state
+            col_btn1, col_btn2 = st.columns([1, 4])
+            with col_btn1:
+                if st.button("Shortlist", key=f"sl_{index}"):
+                    st.success(f"Shortlisted {row['Name']}!")
+            with col_btn2:
+                if st.button("Send Feedback", key=f"fb_{index}"):
+                    st.info(f"Feedback prepared for {row['Name']}")
