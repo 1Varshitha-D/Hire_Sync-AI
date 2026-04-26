@@ -34,7 +34,7 @@ def get_gemini_score(resume_text, jd, api_key):
     try:
         genai.configure(api_key=api_key)
         # 2026 Update: Use gemini-1.5-flash for max stability on free tier
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         
         prompt = f"""
         Analyze Resume vs JD. 
