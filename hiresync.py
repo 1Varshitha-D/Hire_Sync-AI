@@ -37,8 +37,6 @@ def get_gemini_analysis(resume_text, jd, api_key):
         prompt = f"""
         Analyze Resume vs JD. 
         Format strictly: Score | Internal Review | Applicant Guidance
-        - Internal Review: Professional critique for HR.
-        - Applicant Guidance: Encouraging tips for the candidate.
         JD: {jd}
         Resume: {resume_text}
         """
@@ -58,74 +56,74 @@ st.title("🎯 HireSync AI")
 col_a, col_b = st.columns([1, 1])
 
 with col_a:
-    job_description = st.text_area("📋 Job Description", height=150, placeholder="Paste JD here...")
+    job_description = st.text_area("📋 Job Description", height=150)
 with col_b:
     uploaded_files = st.file_uploader("📂 Upload Resumes", type="pdf", accept_multiple_files=True)
 
+# Processing Logic
 if st.button("🚀 Run Dual-View Analysis"):
     if not api_key or not job_description or not uploaded_files:
-        st.error("Missing Input Fields")
+        st.error("Please provide all inputs.")
     else:
-        temp_results = []
+        # Clear previous results but keep the list initialized
+        st.session_state.analysis_results = [] 
+        status_text = st.empty()
         progress_bar = st.progress(0)
+        
         for i, file in enumerate(uploaded_files):
+            status_text.markdown(f"🔍 **Analyzing:** {file.name} ({i+1}/{len(uploaded_files)})")
             text = extract_text_from_pdf(file)
-            if text:
-                res = get_gemini_analysis(text, job_description, api_key)
+            
+            if text.strip():
+                analysis = get_gemini_analysis(text, job_description, api_key)
                 try:
-                    parts = res.split("|")
-                    score = int(re.search(r'\d+', parts[0]).group())
-                    temp_results.append({
-                        "Name": file.name, "Score": score,
-                        "Recruiter": parts[1].strip(), "Applicant": parts[2].strip()
+                    parts = analysis.split("|")
+                    score_val = int(re.search(r'\d+', parts[0]).group())
+                    st.session_state.analysis_results.append({
+                        "Name": file.name,
+                        "Score": score_val,
+                        "Recruiter": parts[1].strip(),
+                        "Applicant": parts[2].strip()
                     })
                 except: continue
+            
             if i < len(uploaded_files) - 1:
-                time.sleep(4) 
+                time.sleep(4) # Respect the 15 RPM limit
             progress_bar.progress((i + 1) / len(uploaded_files))
-        st.session_state.analysis_results = temp_results
+            
+        status_text.success(f"✅ Analyzed {len(st.session_state.analysis_results)} files successfully!")
 
-# --- 6. The User-Friendly Tabs View ---
+# --- 6. Results Display ---
 if st.session_state.analysis_results:
     st.markdown("---")
-    
-    # Define the three main sections of your app
     tab1, tab2, tab3 = st.tabs(["🏢 Recruiter Dashboard", "🎓 Applicant Feedback", "⭐ Final Shortlist"])
-
     df = pd.DataFrame(st.session_state.analysis_results).sort_values(by="Score", ascending=False)
 
-    # --- TAB 1: RECRUITER VIEW ---
     with tab1:
-        st.header("Internal Ranking & Notes")
+        st.header("Internal Ranking")
         for idx, row in df.iterrows():
             with st.expander(f"📊 {row['Score']}% - {row['Name']}"):
-                st.markdown("**Hiring Manager's Notes:**")
                 st.info(row['Recruiter'])
-                if st.button(f"➕ Shortlist {row['Name']}", key=f"rec_{idx}"):
+                # Use a unique key for the button to avoid conflicts
+                if st.button(f"➕ Shortlist {row['Name']}", key=f"short_{idx}"):
                     if row['Name'] not in st.session_state.shortlisted_candidates:
                         st.session_state.shortlisted_candidates.append(row['Name'])
-                        st.toast(f"Added {row['Name']} to shortlist!")
+                        st.toast(f"{row['Name']} Shortlisted!")
 
-    # --- TAB 2: APPLICANT VIEW ---
     with tab2:
-        st.header("Candidate Improvement Guidance")
-        st.write("Share these insights with your applicants to help them grow.")
+        st.header("Applicant Guidance")
         for idx, row in df.iterrows():
             with st.expander(f"💡 Feedback for {row['Name']}"):
-                st.markdown("**Personalized Guidance:**")
                 st.success(row['Applicant'])
 
-    # --- TAB 3: SHORTLIST VIEW ---
     with tab3:
-        st.header("Selected Candidates")
+        st.header("Selected Shortlist")
         if not st.session_state.shortlisted_candidates:
-            st.info("No one has been shortlisted yet.")
+            st.info("No candidates selected.")
         else:
-            # Display names in a clean list
             for name in st.session_state.shortlisted_candidates:
-                st.markdown(f"- **{name}**")
+                st.markdown(f"✅ **{name}**")
             
-            # Exclusive download for shortlisted data
-            sl_df = df[df['Name'].isin(st.session_state.shortlisted_candidates)]
-            csv = sl_df.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Final Shortlist", data=csv, file_name="shortlist_2026.csv")
+            # Allow downloading the specific shortlisted data
+            short_df = df[df['Name'].isin(st.session_state.shortlisted_candidates)]
+            st.download_button("📥 Download Shortlist CSV", data=short_df.to_csv(index=False), file_name="shortlist.csv")
