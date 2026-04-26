@@ -30,16 +30,10 @@ def extract_text_from_pdf(file):
         return "".join([p.extract_text() for p in reader.pages if p.extract_text()])
     except: return ""
 
-def get_gemini_analysis(resume_text, jd, api_key, retries=2):
-    """Self-healing function to handle 404 and 429 errors."""
+def get_gemini_analysis(resume_text, jd, api_key):
     try:
         genai.configure(api_key=api_key)
-        
-        # --- THE FIX: Try the 3 most common 2026 model strings ---
-        # If 'gemini-1.5-flash' fails, the 'except' block will try the others.
-        model_name = "gemini-1.5-flash" 
-        model = genai.GenerativeModel(model_name)
-        
+        model = genai.GenerativeModel("gemini-2.5-flash")
         prompt = f"""
         Analyze Resume vs JD. 
         Format strictly: Score | Internal Review | Applicant Guidance
@@ -48,27 +42,8 @@ def get_gemini_analysis(resume_text, jd, api_key, retries=2):
         """
         response = model.generate_content(prompt)
         return response.text.strip()
-    
     except Exception as e:
-        error_msg = str(e)
-        
-        # Handle Quota Limit (429)
-        if "429" in error_msg and retries > 0:
-            st.warning("⚠️ Speed limit hit. Waiting 30s...")
-            time.sleep(30)
-            return get_gemini_analysis(resume_text, jd, api_key, retries - 1)
-        
-        # Handle Model Not Found (404) - Try a different model name automatically
-        if "404" in error_msg and "gemini-1.5-flash" in model_name:
-            # Try the 'latest' alias if the standard name fails
-            try:
-                model = genai.GenerativeModel("gemini-1.5-flash-latest")
-                response = model.generate_content(prompt)
-                return response.text.strip()
-            except:
-                pass
-                
-        return f"0 | Error: {error_msg} | N/A"
+        return f"0 | Error: {str(e)} | N/A"
 
 # --- 4. Initialize Session States ---
 if "analysis_results" not in st.session_state:
@@ -81,16 +56,18 @@ st.title("🎯 HireSync AI")
 col_a, col_b = st.columns([1, 1])
 
 with col_a:
-    job_description = st.text_area("📋 Job Description", height=150, placeholder="Paste JD here...")
+    job_description = st.text_area("📋 Job Description", height=150)
 with col_b:
-    uploaded_files = st.file_uploader("📂 Upload Resumes (PDF)", type="pdf", accept_multiple_files=True)
+    uploaded_files = st.file_uploader("📂 Upload Resumes", type="pdf", accept_multiple_files=True)
 
+# Processing Logic
 if st.button("🚀 Run Dual-View Analysis"):
     if not api_key or not job_description or not uploaded_files:
-        st.error("Please provide API Key, JD, and Resumes.")
+        st.error("Please provide all inputs.")
     else:
-        st.session_state.analysis_results = []
-        status_text = st.empty() 
+        # Clear previous results but keep the list initialized
+        st.session_state.analysis_results = [] 
+        status_text = st.empty()
         progress_bar = st.progress(0)
         
         for i, file in enumerate(uploaded_files):
@@ -99,44 +76,42 @@ if st.button("🚀 Run Dual-View Analysis"):
             
             if text.strip():
                 analysis = get_gemini_analysis(text, job_description, api_key)
-                
                 try:
                     parts = analysis.split("|")
-                    score_match = re.search(r'\d+', parts[0])
-                    score = int(score_match.group()) if score_match else 0
-                    
+                    score_val = int(re.search(r'\d+', parts[0]).group())
                     st.session_state.analysis_results.append({
-                        "Name": file.name, "Score": score,
-                        "Recruiter": parts[1].strip() if len(parts) > 1 else "Error",
-                        "Applicant": parts[2].strip() if len(parts) > 2 else "Error"
+                        "Name": file.name,
+                        "Score": score_val,
+                        "Recruiter": parts[1].strip(),
+                        "Applicant": parts[2].strip()
                     })
                 except: continue
             
-            # 5-second wait to stay under the 15 RPM Free Tier limit
             if i < len(uploaded_files) - 1:
-                time.sleep(5) 
+                time.sleep(4) # Respect the 15 RPM limit
             progress_bar.progress((i + 1) / len(uploaded_files))
-        
-        status_text.success(f"✅ Finished! Analyzed {len(st.session_state.analysis_results)} resumes.")
+            
+        status_text.success(f"✅ Analyzed {len(st.session_state.analysis_results)} files successfully!")
 
-# --- 6. Results View ---
+# --- 6. Results Display ---
 if st.session_state.analysis_results:
     st.markdown("---")
     tab1, tab2, tab3 = st.tabs(["🏢 Recruiter Dashboard", "🎓 Applicant Feedback", "⭐ Final Shortlist"])
     df = pd.DataFrame(st.session_state.analysis_results).sort_values(by="Score", ascending=False)
 
     with tab1:
-        st.header("Recruiter Insights")
+        st.header("Internal Ranking")
         for idx, row in df.iterrows():
             with st.expander(f"📊 {row['Score']}% - {row['Name']}"):
                 st.info(row['Recruiter'])
-                if st.button(f"➕ Shortlist {row['Name']}", key=f"r_{idx}"):
+                # Use a unique key for the button to avoid conflicts
+                if st.button(f"➕ Shortlist {row['Name']}", key=f"short_{idx}"):
                     if row['Name'] not in st.session_state.shortlisted_candidates:
                         st.session_state.shortlisted_candidates.append(row['Name'])
-                        st.toast(f"Added {row['Name']}!")
+                        st.toast(f"{row['Name']} Shortlisted!")
 
     with tab2:
-        st.header("Candidate Guidance")
+        st.header("Applicant Guidance")
         for idx, row in df.iterrows():
             with st.expander(f"💡 Feedback for {row['Name']}"):
                 st.success(row['Applicant'])
@@ -144,10 +119,11 @@ if st.session_state.analysis_results:
     with tab3:
         st.header("Selected Shortlist")
         if not st.session_state.shortlisted_candidates:
-            st.info("No candidates shortlisted yet.")
+            st.info("No candidates selected.")
         else:
             for name in st.session_state.shortlisted_candidates:
                 st.markdown(f"✅ **{name}**")
             
-            sl_df = df[df['Name'].isin(st.session_state.shortlisted_candidates)]
-            st.download_button("📥 Download Shortlist", data=sl_df.to_csv(index=False), file_name="shortlist_2026.csv")
+            # Allow downloading the specific shortlisted data
+            short_df = df[df['Name'].isin(st.session_state.shortlisted_candidates)]
+            st.download_button("📥 Download Shortlist CSV", data=short_df.to_csv(index=False), file_name="shortlist.csv")
