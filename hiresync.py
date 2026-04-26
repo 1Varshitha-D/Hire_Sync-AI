@@ -30,10 +30,13 @@ def extract_text_from_pdf(file):
         return "".join([p.extract_text() for p in reader.pages if p.extract_text()])
     except: return ""
 
-def get_gemini_analysis(resume_text, jd, api_key):
+def get_gemini_analysis(resume_text, jd, api_key, retries=2):
+    """Analyzes resume with built-in error handling for Quota 429."""
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        # Using 1.5-flash for the 1,500 requests/day free quota
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
         prompt = f"""
         Analyze Resume vs JD. 
         Format strictly: Score | Internal Review | Applicant Guidance
@@ -42,7 +45,13 @@ def get_gemini_analysis(resume_text, jd, api_key):
         """
         response = model.generate_content(prompt)
         return response.text.strip()
+    
     except Exception as e:
+        # If we hit a quota limit, wait and retry
+        if "429" in str(e) and retries > 0:
+            st.warning("⚠️ Speed limit hit. Waiting 30 seconds to retry...")
+            time.sleep(30)
+            return get_gemini_analysis(resume_text, jd, api_key, retries - 1)
         return f"0 | Error: {str(e)} | N/A"
 
 # --- 4. Initialize Session States ---
@@ -56,74 +65,70 @@ st.title("🎯 HireSync AI")
 col_a, col_b = st.columns([1, 1])
 
 with col_a:
-    job_description = st.text_area("📋 Job Description", height=150)
+    job_description = st.text_area("📋 Job Description", height=150, placeholder="Paste JD here...")
 with col_b:
     uploaded_files = st.file_uploader("📂 Upload Resumes", type="pdf", accept_multiple_files=True)
 
-# Processing Logic
 if st.button("🚀 Run Dual-View Analysis"):
     if not api_key or not job_description or not uploaded_files:
-        st.error("Please provide all inputs.")
+        st.error("Missing Input Fields")
     else:
-        # Clear previous results but keep the list initialized
-        st.session_state.analysis_results = [] 
-        status_text = st.empty()
+        st.session_state.analysis_results = []
+        status_text = st.empty() 
         progress_bar = st.progress(0)
         
         for i, file in enumerate(uploaded_files):
-            status_text.markdown(f"🔍 **Analyzing:** {file.name} ({i+1}/{len(uploaded_files)})")
+            status_text.markdown(f"🔍 **Processing ({i+1}/{len(uploaded_files)}):** {file.name}")
             text = extract_text_from_pdf(file)
             
             if text.strip():
                 analysis = get_gemini_analysis(text, job_description, api_key)
+                
                 try:
                     parts = analysis.split("|")
-                    score_val = int(re.search(r'\d+', parts[0]).group())
+                    score = int(re.search(r'\d+', parts[0]).group())
                     st.session_state.analysis_results.append({
-                        "Name": file.name,
-                        "Score": score_val,
-                        "Recruiter": parts[1].strip(),
-                        "Applicant": parts[2].strip()
+                        "Name": file.name, "Score": score,
+                        "Recruiter": parts[1].strip(), "Applicant": parts[2].strip()
                     })
                 except: continue
             
+            # Stay under 15 Requests Per Minute limit
             if i < len(uploaded_files) - 1:
-                time.sleep(4) # Respect the 15 RPM limit
+                time.sleep(5) 
             progress_bar.progress((i + 1) / len(uploaded_files))
-            
-        status_text.success(f"✅ Analyzed {len(st.session_state.analysis_results)} files successfully!")
+        
+        status_text.success(f"✅ Finished! Analyzed {len(st.session_state.analysis_results)} resumes.")
 
-# --- 6. Results Display ---
+# --- 6. The User-Friendly Tabs View ---
 if st.session_state.analysis_results:
     st.markdown("---")
     tab1, tab2, tab3 = st.tabs(["🏢 Recruiter Dashboard", "🎓 Applicant Feedback", "⭐ Final Shortlist"])
     df = pd.DataFrame(st.session_state.analysis_results).sort_values(by="Score", ascending=False)
 
     with tab1:
-        st.header("Internal Ranking")
+        st.header("Internal Ranking & Notes")
         for idx, row in df.iterrows():
             with st.expander(f"📊 {row['Score']}% - {row['Name']}"):
                 st.info(row['Recruiter'])
-                # Use a unique key for the button to avoid conflicts
-                if st.button(f"➕ Shortlist {row['Name']}", key=f"short_{idx}"):
+                if st.button(f"➕ Shortlist {row['Name']}", key=f"rec_{idx}"):
                     if row['Name'] not in st.session_state.shortlisted_candidates:
                         st.session_state.shortlisted_candidates.append(row['Name'])
-                        st.toast(f"{row['Name']} Shortlisted!")
+                        st.toast(f"Added {row['Name']} to shortlist!")
 
     with tab2:
-        st.header("Applicant Guidance")
+        st.header("Candidate Improvement Guidance")
         for idx, row in df.iterrows():
             with st.expander(f"💡 Feedback for {row['Name']}"):
                 st.success(row['Applicant'])
 
     with tab3:
-        st.header("Selected Shortlist")
+        st.header("Selected Candidates")
         if not st.session_state.shortlisted_candidates:
-            st.info("No candidates selected.")
+            st.info("No one has been shortlisted yet.")
         else:
             for name in st.session_state.shortlisted_candidates:
-                st.markdown(f"✅ **{name}**")
+                st.markdown(f"- **{name}**")
             
-            # Allow downloading the specific shortlisted data
-            short_df = df[df['Name'].isin(st.session_state.shortlisted_candidates)]
-            st.download_button("📥 Download Shortlist CSV", data=short_df.to_csv(index=False), file_name="shortlist.csv")
+            sl_df = df[df['Name'].isin(st.session_state.shortlisted_candidates)]
+            st.download_button("📥 Download Final Shortlist", data=sl_df.to_csv(index=False), file_name="shortlist_2026.csv")
