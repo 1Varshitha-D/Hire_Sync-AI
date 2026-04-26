@@ -60,38 +60,39 @@ with col_a:
 with col_b:
     uploaded_files = st.file_uploader("📂 Upload Resumes", type="pdf", accept_multiple_files=True)
 
-# Processing Logic
+# --- Processing Section ---
 if st.button("🚀 Run Dual-View Analysis"):
     if not api_key or not job_description or not uploaded_files:
-        st.error("Please provide all inputs.")
+        st.error("Please provide API Key, JD, and Resumes.")
     else:
-        # Clear previous results but keep the list initialized
-        st.session_state.analysis_results = [] 
-        status_text = st.empty()
+        temp_results = []
         progress_bar = st.progress(0)
         
         for i, file in enumerate(uploaded_files):
-            status_text.markdown(f"🔍 **Analyzing:** {file.name} ({i+1}/{len(uploaded_files)})")
-            text = extract_text_from_pdf(file)
-            
-            if text.strip():
-                analysis = get_gemini_analysis(text, job_description, api_key)
-                try:
-                    parts = analysis.split("|")
-                    score_val = int(re.search(r'\d+', parts[0]).group())
-                    st.session_state.analysis_results.append({
-                        "Name": file.name,
-                        "Score": score_val,
-                        "Recruiter": parts[1].strip(),
-                        "Applicant": parts[2].strip()
-                    })
-                except: continue
-            
-            if i < len(uploaded_files) - 1:
-                time.sleep(4) # Respect the 15 RPM limit
+            with st.spinner(f"Analyzing {file.name}..."):
+                text = extract_text_from_pdf(file)
+                if text.strip():
+                    analysis = get_gemini_score(text, job_description, api_key)
+                    
+                    # Robust Parsing
+                    try:
+                        if "|" in analysis:
+                            parts = analysis.split("|")
+                            score_digits = ''.join(filter(str.isdigit, parts[0]))
+                            score = int(score_digits) if score_digits else 0
+                            
+                            temp_results.append({
+                                "Name": file.name,
+                                "Score": score,
+                                "Recruiter_Notes": parts[1].strip() if len(parts) > 1 else "Analysis failed",
+                                "Applicant_Notes": parts[2].strip() if len(parts) > 2 else "No guidance provided"
+                            })
+                    except:
+                        continue
             progress_bar.progress((i + 1) / len(uploaded_files))
-            
-        status_text.success(f"✅ Analyzed {len(st.session_state.analysis_results)} files successfully!")
+        
+        # Save to memory!
+        st.session_state.analysis_results = temp_results
 
 # --- 6. Results Display ---
 if st.session_state.analysis_results:
@@ -109,6 +110,7 @@ if st.session_state.analysis_results:
                     if row['Name'] not in st.session_state.shortlisted_candidates:
                         st.session_state.shortlisted_candidates.append(row['Name'])
                         st.toast(f"{row['Name']} Shortlisted!")
+                        st.balloons()
 
     with tab2:
         st.header("Applicant Guidance")
