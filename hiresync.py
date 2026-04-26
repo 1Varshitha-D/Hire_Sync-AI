@@ -31,16 +31,21 @@ def extract_text_from_pdf(file):
         return text
     except: return ""
 
-def get_gemini_analysis(resume_text, jd, api_key):
+def get_gemini_analysis(resume_text, jd, api_key, retries=2):
     try:
         genai.configure(api_key=api_key)
-        # Using the standard stable model for 2026
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # FIXED: Using the 2026 stable string without 'models/' prefix
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        
         prompt = f"Analyze Resume vs JD. Format: Score | Internal Review | Applicant Guidance\nJD: {jd}\nResume: {resume_text}"
         response = model.generate_content(prompt)
         return response.text.strip()
+    
     except Exception as e:
-        if "429" in str(e): return "RETRY_NEEDED"
+        if "429" in str(e) and retries > 0:
+            st.warning("⚠️ Quota hit. Waiting 30s...")
+            time.sleep(30)
+            return get_gemini_analysis(resume_text, jd, api_key, retries - 1)
         return f"0 | Error: {str(e)} | N/A"
 
 # --- 4. Initialize Session States ---
@@ -60,22 +65,17 @@ with col_b:
 
 if st.button("🚀 Run Dual-View Analysis"):
     if not api_key or not job_description or not uploaded_files:
-        st.error("Missing Input Fields")
+        st.error("Missing Input")
     else:
         st.session_state.analysis_results = []
         status_text = st.empty() 
         progress_bar = st.progress(0)
         
         for i, file in enumerate(uploaded_files):
-            status_text.markdown(f"🔍 **Analyzing:** {file.name}")
+            status_text.markdown(f"🔍 **Processing:** {file.name}")
             text = extract_text_from_pdf(file)
-            
             if text.strip():
                 analysis = get_gemini_analysis(text, job_description, api_key)
-                if analysis == "RETRY_NEEDED":
-                    time.sleep(30)
-                    analysis = get_gemini_analysis(text, job_description, api_key)
-                
                 try:
                     parts = analysis.split("|")
                     score = int(re.search(r'\d+', parts[0]).group())
@@ -86,11 +86,12 @@ if st.button("🚀 Run Dual-View Analysis"):
                 except: continue
             
             if i < len(uploaded_files) - 1:
-                time.sleep(5) 
+                time.sleep(5) # Throttler for free tier
             progress_bar.progress((i + 1) / len(uploaded_files))
+        
         status_text.success("✅ Analysis Complete!")
 
-# --- 6. Results View (Tabs) ---
+# --- 6. The Tabs View ---
 if st.session_state.analysis_results:
     st.markdown("---")
     tab1, tab2, tab3 = st.tabs(["🏢 Recruiter Dashboard", "🎓 Applicant Feedback", "⭐ Final Shortlist"])
@@ -100,24 +101,20 @@ if st.session_state.analysis_results:
         for idx, row in df.iterrows():
             with st.expander(f"📊 {row['Score']}% - {row['Name']}"):
                 st.info(row['Recruiter'])
-                # SHORTLIST BUTTON WITH BALLOONS
-                if st.button(f"➕ Shortlist {row['Name']}", key=f"rec_{idx}"):
+                if st.button(f"➕ Shortlist {row['Name']}", key=f"r_{idx}"):
                     if row['Name'] not in st.session_state.shortlisted_candidates:
                         st.session_state.shortlisted_candidates.append(row['Name'])
-                        st.balloons() # <--- THE CELEBRATION!
-                        st.toast(f"{row['Name']} added to shortlist!")
+                        st.balloons() # 🎉 Celebration!
+                        st.toast("Added!")
 
     with tab2:
         for idx, row in df.iterrows():
-            with st.expander(f"💡 Feedback for {row['Name']}"):
+            with st.expander(f"💡 Guidance for {row['Name']}"):
                 st.success(row['Applicant'])
 
     with tab3:
-        if not st.session_state.shortlisted_candidates:
-            st.info("Shortlist is empty.")
-        else:
+        if st.session_state.shortlisted_candidates:
             for name in st.session_state.shortlisted_candidates:
-                st.markdown(f"✅ **{name}**")
-            
+                st.markdown(f"- **{name}**")
             sl_df = df[df['Name'].isin(st.session_state.shortlisted_candidates)]
-            st.download_button("📥 Download Shortlist CSV", data=sl_df.to_csv(index=False), file_name="shortlist.csv")
+            st.download_button("📥 Download Shortlist", data=sl_df.to_csv(index=False), file_name="shortlist.csv")
